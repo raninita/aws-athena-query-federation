@@ -295,6 +295,7 @@ public abstract class MetadataHandler
                     logger.info("doHandleRequest: response[{}]", response);
                     assertNotNull(response);
                     objectMapper.writeValue(outputStream, response);
+                    System.out.println(objectMapper.writeValueAsString(response));
                 }
                 return;
             case LIST_TABLES:
@@ -302,6 +303,7 @@ public abstract class MetadataHandler
                     logger.info("doHandleRequest: response[{}]", response);
                     assertNotNull(response);
                     objectMapper.writeValue(outputStream, response);
+                    System.out.println(objectMapper.writeValueAsString(response));
                 }
                 return;
             case GET_TABLE:
@@ -310,6 +312,7 @@ public abstract class MetadataHandler
                     assertNotNull(response);
                     assertTypes(response);
                     objectMapper.writeValue(outputStream, response);
+                    System.out.println(objectMapper.writeValueAsString(response));
                 }
                 return;
             case GET_TABLE_LAYOUT:
@@ -317,6 +320,7 @@ public abstract class MetadataHandler
                     logger.info("doHandleRequest: response[{}]", response);
                     assertNotNull(response);
                     objectMapper.writeValue(outputStream, response);
+                    System.out.println(objectMapper.writeValueAsString(response));
                 }
                 return;
             case GET_SPLITS:
@@ -331,6 +335,7 @@ public abstract class MetadataHandler
                     logger.info("doHandleRequest: response[{}]", response);
                     assertNotNull(response);
                     objectMapper.writeValue(outputStream, response);
+                    System.out.println(objectMapper.writeValueAsString(response));
                 }
                 return;
             case GET_DATASOURCE_CAPABILITIES:
@@ -338,6 +343,7 @@ public abstract class MetadataHandler
                     logger.info("doHandleRequest: response[{}]", response);
                     assertNotNull(response);
                     objectMapper.writeValue(outputStream, response);
+                    System.out.println(objectMapper.writeValueAsString(response));
                 }
                 return;
             default:

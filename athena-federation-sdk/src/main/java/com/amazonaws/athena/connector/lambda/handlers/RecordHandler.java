@@ -169,6 +169,7 @@ public abstract class RecordHandler
                     logger.info("doHandleRequest: response[{}]", response);
                     assertNotNull(response);
                     objectMapper.writeValue(outputStream, response);
+                    System.out.println(objectMapper.writeValueAsString(response));
                 }
                 return;
             default:

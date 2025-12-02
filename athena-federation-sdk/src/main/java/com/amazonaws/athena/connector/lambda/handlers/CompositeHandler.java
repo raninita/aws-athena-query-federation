@@ -145,6 +145,7 @@ public class CompositeHandler
     public final void handleRequest(BlockAllocator allocator, FederationRequest rawReq, OutputStream outputStream, ObjectMapper objectMapper)
             throws Exception
     {
+        System.out.println(objectMapper.writeValueAsString(rawReq));
         if (rawReq instanceof PingRequest) {
             try (PingResponse response = metadataHandler.doPing((PingRequest) rawReq)) {
                 assertNotNull(response);
