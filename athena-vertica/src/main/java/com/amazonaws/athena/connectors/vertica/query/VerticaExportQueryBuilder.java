@@ -30,8 +30,18 @@ import com.google.common.base.Joiner;
 import org.apache.arrow.vector.types.Types;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.arrow.vector.types.pojo.Schema;
-import org.apache.calcite.sql.*;
+import org.apache.calcite.sql.SqlBasicCall;
+import org.apache.calcite.sql.SqlDialect;
+import org.apache.calcite.sql.SqlDynamicParam;
+import org.apache.calcite.sql.SqlIdentifier;
+import org.apache.calcite.sql.SqlKind;
+import org.apache.calcite.sql.SqlLiteral;
+import org.apache.calcite.sql.SqlNode;
+import org.apache.calcite.sql.SqlNodeList;
+import org.apache.calcite.sql.SqlSelect;
+import org.apache.calcite.sql.SqlWriter;
 import org.apache.calcite.sql.fun.SqlStdOperatorTable;
 import org.apache.calcite.sql.parser.SqlParser;
 import org.apache.calcite.sql.parser.SqlParserPos;
@@ -270,26 +280,21 @@ public class VerticaExportQueryBuilder {
         return this;
     }
 
-    public VerticaExportQueryBuilder withQueryPlan(final QueryPlan queryPlan, final SqlDialect sqlDialect,
-                                                   final String schemaName, final String tableName) {
+    public VerticaExportQueryBuilder withQueryPlan(final QueryPlan queryPlan, final SqlDialect sqlDialect) {
         String base64EncodedPlan = queryPlan.getSubstraitPlan();
 
         SqlNode sqlNode = SubstraitSqlUtils.getSqlNodeFromSubstraitPlan(base64EncodedPlan, sqlDialect);
         Schema tableSchema = SubstraitSqlUtils.getTableSchemaFromSubstraitPlan(base64EncodedPlan, sqlDialect);
 
-        if (!(sqlNode instanceof SqlSelect)) {
+        if (!(sqlNode instanceof SqlSelect select)) {
             throw new RuntimeException("Unsupported Query Type. Only SELECT Query is supported.");
         }
-        SqlSelect select = (SqlSelect) sqlNode;
 
         // Remove auto-generated columnName aliases and cast timestamp/timestampz type field
         select = processSelectList(select, tableSchema);
 
-        Map<String, String> aliasToOriginalMap = createAliasMapping(sqlNode);
-        Schema adaptedSchema = createSchemaWithOriginalNames(tableSchema, aliasToOriginalMap);
-
         List<SubstraitTypeAndValue> accumulator = new ArrayList<>();
-        SubstraitAccumulatorVisitor visitor = new SubstraitAccumulatorVisitor(accumulator, Collections.emptyMap(), adaptedSchema);
+        SubstraitAccumulatorVisitor visitor = new SubstraitAccumulatorVisitor(accumulator, Collections.emptyMap(), tableSchema);
         select.accept(visitor);
 
         select = createParameterizedQuery(select);
@@ -319,28 +324,7 @@ public class VerticaExportQueryBuilder {
     }
 
     /**
-     * Converts SQL Standard FETCH syntax to Vertica LIMIT syntax.
-     *
-     * Why programmatic approach:
-     *  - Calcite's VerticaSqlDialect incorrectly generates FETCH NEXT syntax instead of LIMIT
-     */
-    private String convertFetchToVerticaLimit(final SqlSelect select) {
-        String sql = select.toString();
-        if (select.getOffset() != null) {
-            // Convert "OFFSET n ROWS" to "OFFSET n"
-            sql = sql.replaceAll("OFFSET (\\d+) ROWS", "OFFSET $1");
-        }
-
-        if (select.getFetch() != null) {
-            // Convert "FETCH NEXT n ROWS ONLY" to "LIMIT n"
-            sql = sql.replaceAll("FETCH NEXT (\\d+) ROWS ONLY", "LIMIT $1");
-        }
-
-        return sql;
-    }
-
-    /**
-     * 1. Removes auto-generated aliases added when Substrait plans are converted to SQL, Calcite automatically adds sequential aliases
+     * 1.Removes auto-generated aliases added when Substrait plans are converted to SQL, Calcite automatically adds sequential aliases
      * - SELECT name becomes SELECT name AS name0
      * - SELECT age becomes SELECT age AS age0
      * Example:
@@ -363,21 +347,21 @@ public class VerticaExportQueryBuilder {
         SqlNodeList selectList = expandSelectList(select, tableSchema);
         SqlNodeList newSelectList = new SqlNodeList(SqlParserPos.ZERO);
 
-        for (int i = 0; i < selectList.size(); i++) {
-            SqlNode selectItem = selectList.get(i);
-            Field schemaField = tableSchema.getFields().get(i);
+        for (SqlNode selectItem : selectList) {
             if (selectItem instanceof SqlIdentifier) {
                 // Case 1: Simple column reference without alias - SELECT name FROM users
-                SqlNode processedItem = processColumnWithCasting(selectItem, schemaField);
+                FieldType fieldType = tableSchema.findField(selectItem.toString()).getFieldType();
+                SqlNode processedItem = fieldType.getType() instanceof ArrowType.Timestamp ? processTimestampColumnWithCasting(selectItem) : selectItem;
                 newSelectList.add(processedItem);
-            } else if (selectItem instanceof SqlBasicCall && selectItem.getKind() == SqlKind.AS) {
+            } else if (selectItem instanceof SqlBasicCall asCall && selectItem.getKind() == SqlKind.AS) {
                 // Case 2 & 3: Aliased expressions - SELECT name AS name0 or SELECT COUNT(*) AS count0
-                SqlBasicCall asCall = (SqlBasicCall) selectItem;
                 SqlNode sourceExpr = asCall.operand(0);
 
                 if (sourceExpr instanceof SqlIdentifier) {
                     // Case 2: Simple column with auto-generated alias - SELECT name AS name0 → SELECT name
-                    newSelectList.add(processColumnWithCasting(sourceExpr, schemaField));
+                    FieldType fieldType = tableSchema.findField(sourceExpr.toString()).getFieldType();
+                    SqlNode processedItem = fieldType.getType() instanceof ArrowType.Timestamp ? processTimestampColumnWithCasting(sourceExpr) : sourceExpr;
+                    newSelectList.add(processedItem);
                 } else {
                     // Case 3: Complex expression with alias - SELECT COUNT(*) AS count0 (keep alias)
                     newSelectList.add(selectItem);
@@ -394,7 +378,7 @@ public class VerticaExportQueryBuilder {
         return newSelect;
     }
 
-    // Expands the SELECT list by replacing * with explicit column references.
+    // Expands the SELECT list by replacing * with explicit column references to apply cast on timestamp fields.
     private SqlNodeList expandSelectList(final SqlSelect select, final Schema tableSchema) {
         SqlNodeList expandedList = new SqlNodeList(SqlParserPos.ZERO);
         for (SqlNode selectItem : select.getSelectList()) {
@@ -410,11 +394,9 @@ public class VerticaExportQueryBuilder {
     return expandedList;
     }
 
-    // Process column and apply timestamp casting if needed
-    private SqlNode processColumnWithCasting(SqlNode columnNode, Field schemaField) {
-        if (columnNode instanceof SqlIdentifier && schemaField != null &&
-                schemaField.getType() instanceof ArrowType.Timestamp) {
-
+    // Vertica exports timestamp/timestamptz fields as INT 96 (26 digit number) which causes
+    // data corruption. Casting to VARCHAR ensures proper timestamp export format.
+    private SqlNode processTimestampColumnWithCasting(SqlNode columnNode) {
             String columnName = ((SqlIdentifier) columnNode).getSimple();
             String quotedColumn = QUOTE_CHARS + columnName + QUOTE_CHARS;
 
@@ -431,10 +413,63 @@ public class VerticaExportQueryBuilder {
                         new SqlIdentifier(columnName, SqlParserPos.ZERO)
                 );
             } catch (Exception e) {
+                LOGGER.warn("Failed to cast column '{}', using column without casting. Error: {}",
+                        columnName, e.getMessage());
                 return columnNode; // Fallback to original
             }
+    }
+
+    /**
+     * Converts SQL Standard FETCH syntax to Vertica LIMIT syntax.
+     *
+     * Why programmatic approach:
+     *  - Calcite's VerticaSqlDialect incorrectly generates FETCH NEXT syntax instead of LIMIT
+     */
+    private String convertFetchToVerticaLimit(final SqlSelect select) {
+        String sql = select.toString();
+        if (select.getOffset() != null) {
+            // Convert "OFFSET n ROWS" to "OFFSET n"
+            sql = sql.replaceAll("OFFSET (\\d+) ROWS", "OFFSET $1");
         }
-        return columnNode;
+
+        if (select.getFetch() != null) {
+            // Convert "FETCH NEXT n ROWS ONLY" to "LIMIT n"
+            sql = sql.replaceAll("FETCH NEXT (\\d+) ROWS ONLY", "LIMIT $1");
+        }
+
+        return sql;
+    }
+
+    /**
+     * Replaces WHERE clause literals with {paramN} placeholders for StringTemplate processing.
+     * Only processes WHERE clause - SELECT clause literals remain unchanged.
+     *
+     * @param select The SqlSelect with literal values
+     * @return SqlSelect with WHERE literals replaced by {param0}, {param1}, etc.
+     *
+     * @example
+     * Input:  SELECT name FROM users WHERE id = 123 AND status = 'active'
+     * Output: SELECT name FROM users WHERE id = {param0} AND status = {param1}
+     */
+    private SqlSelect createParameterizedQuery(SqlSelect select) {
+        AtomicInteger paramIndex = new AtomicInteger(0);
+
+        if (select.getWhere() != null) {
+            SqlShuttle parameterize = new SqlShuttle() {
+                @Override
+                public SqlNode visit(SqlLiteral literal) {
+                    String paramName = "param" + paramIndex.getAndIncrement();
+                    return new SqlDynamicParam(paramIndex.get() - 1, literal.getParserPosition()) {
+                        @Override
+                        public void unparse(SqlWriter writer, int leftPrec, int rightPrec) {
+                            writer.print("{" + paramName + "}");
+                        }
+                    };
+                }
+            };
+            return(SqlSelect)select.accept(parameterize);
+        }
+        return select;
     }
 
     private void handleDataTypesForSqlTemplate(final List<SubstraitTypeAndValue> accumulator, ST sqlTemplate) {
@@ -493,6 +528,7 @@ public class VerticaExportQueryBuilder {
                                     .toEpochMilli();
                         }
                     } catch (DateTimeParseException e) {
+                        LOGGER.error("Can't handle timestamp format: {}, value class: {}", typeAndValue.getType(), typeAndValue.getValue().getClass().getName());
                         throw new AthenaConnectorException(String.format("Can't handle timestamp format: %s, value class: %s", typeAndValue.getType(), typeAndValue.getValue().getClass().getName()),
                                 ErrorDetails.builder()
                                         .errorCode(FederationSourceErrorCode.OPERATION_NOT_SUPPORTED_EXCEPTION.toString())
@@ -508,62 +544,10 @@ public class VerticaExportQueryBuilder {
                     sqlTemplate.add(paramName, typeAndValue.toString().getBytes());
                     break;
                 default:
+                    LOGGER.error("Can't handle type: {}, {}", typeAndValue.getType(), typeAndValue.getType());
                     throw new AthenaConnectorException(String.format("Can't handle type: %s, %s", typeAndValue.getType(), typeAndValue.getType()),
                             ErrorDetails.builder().errorCode(FederationSourceErrorCode.OPERATION_NOT_SUPPORTED_EXCEPTION.toString()).build());
             }
         }
     }
-
-    private Map<String, String> createAliasMapping(final SqlNode sqlNode) {
-        Map<String, String> mapping = new HashMap<>();
-        if (sqlNode instanceof SqlSelect) {
-            SqlSelect select = (SqlSelect) sqlNode;
-            SqlNodeList selectList = select.getSelectList();
-            for (SqlNode node : selectList) {
-                if (node instanceof SqlBasicCall && node.getKind() == SqlKind.AS) {
-                    // Handle "column AS alias"
-                    SqlBasicCall asCall = (SqlBasicCall) node;
-                    String originalName = asCall.operand(0).toString().replace("`", "");
-                    String aliasName = asCall.operand(1).toString().replace("`", "");
-                    mapping.put(aliasName, originalName);
-                }
-            }
-        }
-        return mapping;
-    }
-
-    // CHANGE: Add helper method to create schema with original column names
-
-    private Schema createSchemaWithOriginalNames(Schema substraitSchema, Map<String, String> aliasToOriginal) {
-        List<Field> adaptedFields = new ArrayList<>();
-        for (Field field : substraitSchema.getFields()) {
-            String aliasName = field.getName();
-            String originalName = aliasToOriginal.getOrDefault(aliasName, aliasName);
-            // Create new field with original name but keep the same type and metadata
-            Field adaptedField = new Field(originalName, field.getFieldType(), field.getChildren());
-            adaptedFields.add(adaptedField);
-        }
-        return new Schema(adaptedFields);
-    }
-
-    private SqlSelect createParameterizedQuery(SqlSelect select) {
-        AtomicInteger paramIndex = new AtomicInteger(0);
-
-        if (select.getWhere() != null) {
-            SqlShuttle parameterize = new SqlShuttle() {
-                @Override
-                public SqlNode visit(SqlLiteral literal) {
-                    String paramName = "param" + paramIndex.getAndIncrement();
-                    return new SqlDynamicParam(paramIndex.get() - 1, literal.getParserPosition()) {
-                        @Override
-                        public void unparse(SqlWriter writer, int leftPrec, int rightPrec) {
-                            writer.print("{" + paramName + "}");
-                        }
-                    };
-                }
-            };
-            return(SqlSelect)select.accept(parameterize);
-            }
-            return select;
-        }
 }

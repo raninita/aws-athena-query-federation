@@ -297,7 +297,7 @@ public class VerticaMetadataHandler
                     queryBuilder = queryFactory.createSubstraitVerticaExportQueryBuilder();
                     preparedSQLStmt = queryBuilder.withS3ExportBucket(s3ExportBucket)
                             .withQueryID(queryID)
-                            .withQueryPlan(constraints.getQueryPlan(), VerticaSqlDialect.DEFAULT, tableName.getSchemaName(), tableName.getTableName())
+                            .withQueryPlan(constraints.getQueryPlan(), VerticaSqlDialect.DEFAULT)
                             .build();
                 } else {
                     preparedSQLStmt = queryBuilder.withS3ExportBucket(s3ExportBucket)

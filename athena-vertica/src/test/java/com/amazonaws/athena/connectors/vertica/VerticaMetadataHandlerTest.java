@@ -294,7 +294,7 @@ public class VerticaMetadataHandlerTest extends TestBase
         Mockito.when(connection.getMetaData().getColumns(null, "schema1", "table1", null)).thenReturn(Mockito.mock(ResultSet.class));
         Mockito.lenient().when(queryFactory.createVerticaExportQueryBuilder()).thenReturn(new VerticaExportQueryBuilder(new ST("templateVerticaExportQuery")));
         Mockito.when(verticaMetadataHandlerMocked.getS3ExportBucket()).thenReturn(s3ExportBucket);
-        QueryPlan queryPlan = new QueryPlan("1.0", "Ch4IARIaL2Z1bmN0aW9uc19jb21wYXJpc29uLnlhbWwSExoRCAEaDWVxdWFsOmFueV9hbnkaqAMSpQMKlQM6kgMKBRIDCgETEv4CEvsCCgIKABLQAgrNAgoCCgASrgIKC2VtcGxveWVlX2lkCglpc19hY3RpdmUKDWVtcGxveWVlX25hbWUKCWpvYl90aXRsZQoHYWRkcmVzcwoJam9pbl9kYXRlCgl0aW1lc3RhbXAKCGR1cmF0aW9uCgZzYWxhcnkKBWJvbnVzCgVoYXNoMQoFaGFzaDIKBGNvZGUKBWRlYml0CgVjb3VudAoGYW1vdW50CgdiYWxhbmNlCgRyYXRlCgpkaWZmZXJlbmNlEn0KBGICEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBCoCEAEKBCoCEAEKBCoCEAEKB8IBBBATIAEKBCoCEAEKB8IBBBATIAEKBCoCEAEKB8IBBBATIAEKBCoCEAEYAjoWChRiYXNpY193cml0ZV9ub25leGlzdBoiGiAaBAoCEAEiChoIEgYKAhIAIgAiDBoKCghiBkVNUDAwMRoIEgYKAhIAIgASC0VNUExPWUVFX0lE");
+        QueryPlan queryPlan = new QueryPlan("", "Ch4IARIaL2Z1bmN0aW9uc19jb21wYXJpc29uLnlhbWwSFRoTCAEQARoNZXF1YWw6YW55X2FueRrsAxLpAwrZAzrWAwoFEgMKARYSwAMSvQMKAgoAEo4DCosDCgIKABLkAgoEZGF0ZQoLZmxvYXRfdmFsdWUKBXByaWNlCgtlbXBsb3llZV9pZAoJaXNfYWN0aXZlCg1lbXBsb3llZV9uYW1lCglqb2JfdGl0bGUKB2FkZHJlc3MKCWpvaW5fZGF0ZQoJdGltZXN0YW1wCghkdXJhdGlvbgoGc2FsYXJ5CgVib251cwoFaGFzaDEKBWhhc2gyCgRjb2RlCgVkZWJpdAoFY291bnQKBmFtb3VudAoHYmFsYW5jZQoEcmF0ZQoKZGlmZmVyZW5jZRKYAQoFggECEAEKBFoCEAEKBFoCEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBGICEAEKBYIBAhABCgWKAgIYAQoEYgIQAQoEYgIQAQoEYgIQAQoEOgIQAQoEOgIQAQoEOgIQAQoJwgEGCAIQCiABCgQ6AhABCgnCAQYIAhAKIAEKBDoCEAEKCcIBBggCEAogAQoEOgIQARgCOh4KBnB1YmxpYwoUYmFzaWNfd3JpdGVfbm9uZXhpc3QaJhokCAEaBAoCEAEiDBoKEggKBBICCAMiACIMGgoKCGIGRU1QMDAxGgoSCAoEEgIIAyIAEgtFTVBMT1lFRV9JRDILEEoqB2lzdGhtdXM=");
 
         try (GetTableLayoutRequest req = new GetTableLayoutRequest(federatedIdentity, queryId, "default",
                 new TableName("public", "basic_write_nonexist"),
@@ -304,7 +304,9 @@ public class VerticaMetadataHandlerTest extends TestBase
             Block partitions = res.getPartitions();
 
             String actualExportSql = partitions.getFieldReader("preparedStmt").readText().toString();
-            Assertions.assertTrue(actualExportSql.contains("SELECT preparedStmt FROM \"public\".\"basic_write_nonexist\" WHERE \"employee_id\" = 'EMP001'"));
+            Assertions.assertTrue(actualExportSql.contains("SELECT \"employee_id\"\n" +
+                    "FROM \"public\".\"basic_write_nonexist\"\n" +
+                    "WHERE \"employee_id\" = 'EMP001'"));
         }
     }
 
