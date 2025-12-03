@@ -57,23 +57,7 @@ public class SubstraitAccumulatorVisitor extends SqlShuttle
     public SqlNode visit(SqlIdentifier id)
     {
         if (id.isSimple()) {
-            String identifier = id.getSimple();
-
-            // Attempt to find the identifier in the schema to determine if it's a valid column.
-            // If the identifier is not found (e.g., table names, aliases, function names),
-            // set currentColumn to null so that associated literals are skipped during processing.
-            // This prevents failures when processing queries like "SELECT * FROM table LIMIT 10"
-            // where "table" is a table name, not a column name.
-            try {
-                Field field = schema.findField(identifier);
-                currentColumn = (field != null) ? identifier : null;
-            } catch (IllegalArgumentException e) {
-                // Field not found in schema, skip it
-                currentColumn = null;
-            }
-        }
-        else {
-            currentColumn = null;
+            currentColumn = id.getSimple();
         }
         return super.visit(id);
     }

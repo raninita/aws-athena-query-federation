@@ -49,8 +49,16 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeFormatterBuilder;
 import java.time.format.DateTimeParseException;
-import java.util.*;
+import java.time.temporal.ChronoField;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class VerticaExportQueryBuilder {
@@ -276,8 +284,6 @@ public class VerticaExportQueryBuilder {
 
         // Remove auto-generated columnName aliases and cast timestamp/timestampz type field
         select = processSelectList(select, tableSchema);
-        // Qualifies the table name by prefixing it with its schema name
-        qualifyTableNames(select, schemaName, tableName);
 
         Map<String, String> aliasToOriginalMap = createAliasMapping(sqlNode);
         Schema adaptedSchema = createSchemaWithOriginalNames(tableSchema, aliasToOriginalMap);
@@ -431,32 +437,6 @@ public class VerticaExportQueryBuilder {
         return columnNode;
     }
 
-    /**
-     * Qualifies table names with schema to resolve naming conflicts across multiple schemas.
-     * This prevents ambiguity when different schemas contain tables with identical names.
-     * Example transformation:
-     * - Input:  SELECT * FROM employees WHERE id = 1
-     * - Output: SELECT * FROM "hr"."employees" WHERE id = 1
-     *
-     * @param select     The SQL SELECT statement to modify
-     * @param schemaName The schema name to prepend (e.g., "hr", "public")
-     * @param tableName  The table name to qualify (e.g., "employees")
-     */
-    private void qualifyTableNames(SqlSelect select, final String schemaName, final String tableName) {
-        SqlNode from = select.getFrom();
-        if (from instanceof SqlIdentifier) {
-            SqlIdentifier table = (SqlIdentifier) from;
-            if (table.isSimple() && table.getSimple().equals(tableName)) {
-                // Create qualified identifier: schema.table
-                SqlIdentifier qualified = new SqlIdentifier(
-                        Arrays.asList(schemaName, tableName),
-                        table.getParserPosition()
-                );
-                select.setFrom(qualified);
-            }
-        }
-    }
-
     private void handleDataTypesForSqlTemplate(final List<SubstraitTypeAndValue> accumulator, ST sqlTemplate) {
         for (int i = 0; i < accumulator.size(); i++) {
             SubstraitTypeAndValue typeAndValue = accumulator.get(i);
@@ -494,7 +474,24 @@ public class VerticaExportQueryBuilder {
                 case TIMESTAMP:
                     long value;
                     try {
-                        value = LocalDateTime.parse(typeAndValue.getValue().toString()).atZone(BlockUtils.UTC_ZONE_ID).toInstant().toEpochMilli();
+                        if (typeAndValue.getValue().toString().contains("T")) {
+                            value = LocalDateTime.parse(typeAndValue.getValue().toString()).atZone(BlockUtils.UTC_ZONE_ID).toInstant().toEpochMilli();
+                        }
+                        else {
+                            // Converts a Calcite-compatible timestamp value into epoch milliseconds using UTC.
+                            // This method supports all Calcite timestamp formats, including fractional seconds with 0-9 digits (milliseconds, microseconds, nanoseconds)
+                            DateTimeFormatter formatter = new DateTimeFormatterBuilder()
+                                    .appendPattern("yyyy-MM-dd HH:mm:ss")
+                                    .optionalStart()
+                                    .appendFraction(ChronoField.NANO_OF_SECOND, 0, 9, true)
+                                    .optionalEnd()
+                                    .toFormatter();
+
+                            LocalDateTime ldt = LocalDateTime.parse(typeAndValue.getValue().toString(), formatter);
+                            value = ldt.atZone(ZoneOffset.UTC)
+                                    .toInstant()
+                                    .toEpochMilli();
+                        }
                     } catch (DateTimeParseException e) {
                         throw new AthenaConnectorException(String.format("Can't handle timestamp format: %s, value class: %s", typeAndValue.getType(), typeAndValue.getValue().getClass().getName()),
                                 ErrorDetails.builder()
